@@ -1,0 +1,119 @@
+import re
+import string
+import numpy as np
+from nltk.corpus import stopwords
+from nltk.stem import PorterStemmer
+from nltk.tokenize import TweetTokenizer
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+
+# --- Підготовка інструментів ---
+stopwords_english = stopwords.words('english')
+stemmer = PorterStemmer()
+tokenizer = TweetTokenizer(preserve_case=False, strip_handles=True, reduce_len=True)
+
+# --- Функція для обробки тексту ---
+def process_tweet(tweet):
+    """Обробляє твіт, очищуючи від стоп-слів, знаків пунктуації, посилань тощо"""
+    tweet = re.sub(r'\$\w*', '', tweet)
+    tweet = re.sub(r'^RT[\s]+', '', tweet)
+    tweet = re.sub(r'https?:\/\/.*[\r\n]*', '', tweet)
+    tweet = re.sub(r'#', '', tweet)
+    tweet_tokens = tokenizer.tokenize(tweet)
+    tweets_clean = [stemmer.stem(word) for word in tweet_tokens 
+                    if word not in stopwords_english and word not in string.punctuation]
+    return tweets_clean
+
+# --- Побудова словника частотності ---
+def count_tweets(result, tweets, labels):
+    """Формує словник частотності для кожного слова"""
+    for label, tweet in zip(labels, tweets):
+        for word in process_tweet(tweet):
+            pair = (word, label)
+            if pair in result:
+                result[pair] += 1
+            else:
+                result[pair] = 1
+    return result
+
+# --- Тренування класифікатора ---
+def train_naive_bayes(freqs, train_x, train_y):
+    """Тренує наївний баєсівський класифікатор"""
+    loglikelihood = {}
+    logprior = 0
+
+    vocab = set([pair[0] for pair in freqs.keys()])
+    V = len(vocab)
+
+    N_pos = sum([freqs[pair] for pair in freqs if pair[1] == 1])
+    N_neg = sum([freqs[pair] for pair in freqs if pair[1] == 0])
+
+    D = len(train_y)
+    D_pos = sum(train_y)
+    D_neg = D - D_pos
+
+    logprior = np.log(D_pos) - np.log(D_neg)
+
+    for word in vocab:
+        freq_pos = freqs.get((word, 1), 0)
+        freq_neg = freqs.get((word, 0), 0)
+
+        p_w_pos = (freq_pos + 1) / (N_pos + V)
+        p_w_neg = (freq_neg + 1) / (N_neg + V)
+
+        loglikelihood[word] = np.log(p_w_pos / p_w_neg)
+
+    return logprior, loglikelihood
+
+# --- Функція класифікації ---
+def naive_bayes_predict(tweet, logprior, loglikelihood):
+    """Класифікує твіт як позитивний або негативний"""
+    words = process_tweet(tweet)
+    p = logprior
+    for word in words:
+        if word in loglikelihood:
+            p += loglikelihood[word]
+    return 1 if p > 0 else 0
+
+# --- Оцінка точності ---
+def test_naive_bayes(test_x, test_y, logprior, loglikelihood):
+    """Оцінює точність класифікатора"""
+    predictions = [naive_bayes_predict(tweet, logprior, loglikelihood) for tweet in test_x]
+    return accuracy_score(test_y, predictions)
+
+# --- Аналіз позитивних і негативних слів ---
+def get_top_words(freqs, loglikelihood, n=10):
+    """Повертає найчастіші позитивні та негативні слова"""
+    sorted_words = sorted(loglikelihood.items(), key=lambda x: x[1], reverse=True)
+    top_positive = sorted_words[:n]
+    top_negative = sorted_words[-n:]
+    return top_positive, top_negative
+
+# --- Основний блок ---
+if __name__ == "__main__":
+    # Приклад даних
+    tweets = ["I love this!", "I hate that!", "This is amazing!", "I feel awful."]
+    labels = [1, 0, 1, 0]  # 1 - позитивний, 0 - негативний
+
+    # Розділення даних на тренувальний та тестовий набори
+    train_x, test_x, train_y, test_y = train_test_split(tweets, labels, test_size=0.25, random_state=42)
+
+    # Побудова словника частотності
+    freqs = count_tweets({}, train_x, train_y)
+
+    # Тренування класифікатора
+    logprior, loglikelihood = train_naive_bayes(freqs, train_x, train_y)
+
+    # Оцінка точності
+    accuracy = test_naive_bayes(test_x, test_y, logprior, loglikelihood)
+    print(f"Accuracy: {accuracy * 100:.2f}%")
+
+    # Аналіз найчастіших слів
+    top_positive, top_negative = get_top_words(freqs, loglikelihood)
+    print("Top Positive Words:", top_positive)
+    print("Top Negative Words:", top_negative)
+
+    # Тестування на власному прикладі
+    my_tweet = "I feel amazing today! Life is great."
+    sentiment = naive_bayes_predict(my_tweet, logprior, loglikelihood)
+    print(f"Sentiment for '{my_tweet}': {'Positive' if sentiment == 1 else 'Negative'}")
